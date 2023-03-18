@@ -103,6 +103,7 @@ def get_count_risk_rolling_window(terminal_transactions, delay_period=7, windows
     return terminal_transactions
 
 
+
 # --------------------------------------------------------------------------------- Model Building
 # ----------------------------------------------------
 def read_from_files(DIR_INPUT, BEGIN_DATE, END_DATE):
@@ -507,3 +508,157 @@ def card_precision_top_k_custom(y_true, y_pred, top_k, transactions_df):
     
     # Return the mean_card_precision_top_k
     return mean_card_precision_top_k
+
+# Get the performance plot for a single performance metric
+def get_execution_times_plot(performances_df,
+                             title="",
+                             parameter_name="Tree maximum depth"):
+    
+    fig, ax = plt.subplots(1,1, figsize=(5,4))
+    
+    # Plot data on graph
+    ax.plot(performances_df['Parameters summary'], performances_df["Execution time"], 
+            color="black")
+        
+    # Set title, and x and y axes labels
+    ax.set_title(title, fontsize=14)
+    ax.set(xlabel = parameter_name, ylabel="Execution time (seconds)")
+    
+    
+    
+def model_selection_performances(performances_df_dictionary,
+                                 performance_metric='AUC ROC',
+                                 model_classes=['Decision Tree', 
+                                                'Logistic Regression', 
+                                                'Random Forest', 
+                                                'XGBoost'],
+                                 default_parameters_dictionary={
+                                                "Decision Tree": 50,
+                                                "Logistic Regression": 1,
+                                                "Random Forest": "100/50",
+                                                "XGBoost": "100/0.3/6"
+                                            }):
+    
+    mean_performances_dictionary={
+        "Default parameters": [],
+        "Best validation parameters": [],
+        "Optimal parameters": []
+    }
+    
+    std_performances_dictionary={
+        "Default parameters": [],
+        "Best validation parameters": [],
+        "Optimal parameters": []
+    }
+    
+    # For each model class
+    for model_class in model_classes:
+        
+        performances_df=performances_df_dictionary[model_class]
+        
+        # Get the performances for the default paramaters
+        default_performances=performances_df[performances_df['Parameters summary']==default_parameters_dictionary[model_class]]
+        default_performances=default_performances.round(decimals=3)
+        
+        mean_performances_dictionary["Default parameters"].append(default_performances[performance_metric+" Test"].values[0])
+        std_performances_dictionary["Default parameters"].append(default_performances[performance_metric+" Test Std"].values[0])
+        
+        # Get the performances for the best estimated parameters
+        performances_summary=get_summary_performances(performances_df, parameter_column_name="Parameters summary")
+        mean_std_performances=performances_summary.loc[["Test performance"]][performance_metric].values[0]
+        mean_std_performances=mean_std_performances.split("+/-")
+        mean_performances_dictionary["Best validation parameters"].append(float(mean_std_performances[0]))
+        std_performances_dictionary["Best validation parameters"].append(float(mean_std_performances[1]))
+        
+        # Get the performances for the boptimal parameters
+        mean_std_performances=performances_summary.loc[["Optimal test performance"]][performance_metric].values[0]
+        mean_std_performances=mean_std_performances.split("+/-")
+        mean_performances_dictionary["Optimal parameters"].append(float(mean_std_performances[0]))
+        std_performances_dictionary["Optimal parameters"].append(float(mean_std_performances[1]))
+        
+    # Return the mean performances and their standard deviations    
+    return (mean_performances_dictionary,std_performances_dictionary)
+
+
+# Get the performance plot for a single performance metric
+def get_model_selection_performance_plot(performances_df_dictionary, 
+                                         ax, 
+                                         performance_metric,
+                                         ylim=[0,1],
+                                         model_classes=['Decision Tree', 
+                                                        'Logistic Regression', 
+                                                        'Random Forest', 
+                                                        'XGBoost']):
+    
+    
+    (mean_performances_dictionary,std_performances_dictionary) = \
+        model_selection_performances(performances_df_dictionary=performances_df_dictionary,
+                                     performance_metric=performance_metric)
+    
+    
+    # width of the bars
+    barWidth = 0.3
+    # The x position of bars
+    r1 = np.arange(len(model_classes))
+    r2 = r1+barWidth
+    r3 = r1+2*barWidth
+    
+    # Create Default parameters bars (Orange)
+    ax.bar(r1, mean_performances_dictionary['Default parameters'], 
+           width = barWidth, color = '#CA8035', edgecolor = 'black', 
+           yerr=std_performances_dictionary['Default parameters'], capsize=7, label='Default parameters')
+ 
+    # Create Best validation parameters bars (Red)
+    ax.bar(r2, mean_performances_dictionary['Best validation parameters'], 
+           width = barWidth, color = '#008000', edgecolor = 'black', 
+           yerr=std_performances_dictionary['Best validation parameters'], capsize=7, label='Best validation parameters')
+
+    # Create Optimal parameters bars (Green)
+    ax.bar(r3, mean_performances_dictionary['Optimal parameters'], 
+           width = barWidth, color = '#2F4D7E', edgecolor = 'black', 
+           yerr=std_performances_dictionary['Optimal parameters'], capsize=7, label='Optimal parameters')
+ 
+
+    # Set title, and x and y axes labels
+    ax.set_ylim(ylim[0],ylim[1])
+    ax.set_xticks(r2+barWidth/2)
+    ax.set_xticklabels(model_classes, rotation = 45, ha="right", fontsize=12)
+    ax.set_title(performance_metric+'\n', fontsize=18)
+    ax.set_xlabel("Model class", fontsize=16)
+    ax.set_ylabel(performance_metric, fontsize=15)
+    
+    
+    
+def get_model_selection_performances_plots(performances_df_dictionary, 
+                                           performance_metrics_list=['AUC ROC', 'Average precision', 'Card Precision@100'],
+                                           ylim_list=[[0.6,0.9],[0.2,0.8],[0.2,0.35]],
+                                           model_classes=['Decision Tree', 
+                                                          'Logistic Regression', 
+                                                          'Random Forest', 
+                                                          'XGBoost']):
+    
+    # Create as many graphs as there are performance metrics to display
+    n_performance_metrics = len(performance_metrics_list)
+    fig, ax = plt.subplots(1, n_performance_metrics, figsize=(5*n_performance_metrics,4))
+    
+    parameter_types=['Default parameters','Best validation parameters','Optimal parameters']
+    
+    # Plot performance metric for each metric in performance_metrics_list
+    for i in range(n_performance_metrics):
+    
+        get_model_selection_performance_plot(performances_df_dictionary, 
+                                             ax[i], 
+                                             performance_metrics_list[i],
+                                             ylim=ylim_list[i],
+                                             model_classes=model_classes
+                                            )
+    
+    ax[n_performance_metrics-1].legend(loc='upper left', 
+                                       labels=parameter_types, 
+                                       bbox_to_anchor=(1.05, 1),
+                                       title="Parameter type",
+                                       prop={'size': 12},
+                                       title_fontsize=12)
+
+    plt.subplots_adjust(wspace=0.5, 
+                        hspace=0.8)
