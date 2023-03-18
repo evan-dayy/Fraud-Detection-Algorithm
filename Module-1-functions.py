@@ -103,55 +103,23 @@ def Simulate_dataset(n_customers = 10000, n_stations = 1000000, nb_days=90, star
     return (customer_profiles_df, station_profiles_df, transactions_df)
 
 # ----------------------------------------------------------------------
-def Simulate_frauds(customer_profiles_table, terminal_profiles_table, transactions_df):
-    
-    # By default, all transactions are genuine
+def Simulate_frauds(customer_profiles_df, station_profiles_df, transactions_df):
     transactions_df['Trans_FRAUD']=0
-    transactions_df['Trans_FRAUD_SCENARIO']=0
-    
-    # Scenario 1
+    #Transaction amount greater than 190 is considered fraud.
     transactions_df.loc[transactions_df.Trans_AMOUNT>190, 'Trans_FRAUD']=1
-    transactions_df.loc[transactions_df.Trans_AMOUNT>190, 'Trans_FRAUD_SCENARIO']=1
-    nb_frauds_scenario_1=transactions_df.Trans_FRAUD.sum()
-    print("Number of frauds from scenario 1: "+str(nb_frauds_scenario_1))
-    
-    # Scenario 2
+    #9 stations are frauds.
     for day in range(transactions_df.Trans_TIME_DAYS.max()):
-        
-        compromised_terminals = terminal_profiles_table.STORE_ID.sample(n=2, random_state=day)
-        
-        compromised_transactions=transactions_df[(transactions_df.Trans_TIME_DAYS>=day) & 
-                                                    (transactions_df.Trans_TIME_DAYS<day+14) & 
-                                                    (transactions_df.STORE_ID.isin(compromised_terminals))]
-                            
-        transactions_df.loc[compromised_transactions.index,'Trans_FRAUD']=1
-        transactions_df.loc[compromised_transactions.index,'Trans_FRAUD_SCENARIO']=2
-    
-    nb_frauds_scenario_2=transactions_df.Trans_FRAUD.sum()-nb_frauds_scenario_1
-    print("Number of frauds from scenario 2: "+str(nb_frauds_scenario_2))
-    
-    # Scenario 3
+        fraud_stations = station_profiles_df.STORE_ID.sample(n=9, random_state=day)
+        fraud_transactions=transactions_df[(transactions_df.Trans_TIME_DAYS>=day) & (transactions_df.Trans_TIME_DAYS<day+10) &(transactions_df.STORE_ID.isin(fraud_stations))]
+        transactions_df.loc[fraud_transactions.index,'Trans_FRAUD']=1
+    #10 customers are selected as fraud victims.
     for day in range(transactions_df.Trans_TIME_DAYS.max()):
-        
-        compromised_customers = customer_profiles_table.CUSTOMER_ID.sample(n=3, random_state=day).values
-        
-        compromised_transactions=transactions_df[(transactions_df.Trans_TIME_DAYS>=day) & 
-                                                    (transactions_df.Trans_TIME_DAYS<day+7) & 
-                                                    (transactions_df.CUSTOMER_ID.isin(compromised_customers))]
-        
-        nb_compromised_transactions=len(compromised_transactions)
-        
-        
+        fraud_customers = customer_profiles_df.CUSTOMER_ID.sample(n=10, random_state=day).values
+        fraud_transactions=transactions_df[(transactions_df.Trans_TIME_DAYS>=day) & (transactions_df.Trans_TIME_DAYS<day+7) & (transactions_df.CUSTOMER_ID.isin(fraud_customers))]
+        num_fraud_transactions=len(fraud_transactions)
         random.seed(day)
-        index_fauds = random.sample(list(compromised_transactions.index.values),k=int(nb_compromised_transactions/3))
-        
-        transactions_df.loc[index_fauds,'Trans_AMOUNT']=transactions_df.loc[index_fauds,'Trans_AMOUNT']*5
-        transactions_df.loc[index_fauds,'Trans_FRAUD']=1
-        transactions_df.loc[index_fauds,'Trans_FRAUD_SCENARIO']=3
-        
-                             
-    nb_frauds_scenario_3=transactions_df.Trans_FRAUD.sum()-nb_frauds_scenario_2-nb_frauds_scenario_1
-    print("Number of frauds from scenario 3: "+str(nb_frauds_scenario_3))
-    
-    return transactions_df                 
-
+        index = random.sample(list(fraud_transactions.index.values),k=int(num_fraud_transactions/3))
+        #We modify their transaction values hoping to be mimic real life scenarios.
+        transactions_df.loc[index,'Trans_FRAUD']=transactions_df.loc[index,'Trans_AMOUNT']*3
+        transactions_df.loc[index,'Trans_FRAUD']=1        
+    return transactions_df  

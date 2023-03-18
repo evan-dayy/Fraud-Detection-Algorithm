@@ -1,4 +1,4 @@
-# General
+
 import os
 import pandas as pd
 import numpy as np
@@ -9,179 +9,126 @@ import pickle
 import json
 import datetime
 import random
-
-#import sklearn
 import sklearn
 from sklearn import *
-
 import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-sns.set_style('darkgrid', {'axes.facecolor': '0.9'})
-
 import graphviz
 import xgboost
-
-# For imbalanced learning
 import imblearn
-import warnings
-warnings.filterwarnings('ignore')
+sns.set_style('whitegrid', {'axes.facecolor': '0.8'})
 # --------------------------------------------------------------------------------- Feature Engineering
 # ----------------------------------------------------
-# Binary Output
+# Binary Output : Whether a day is during weekend or during weekday
 def is_weekend(tx_datetime):
     weekday = tx_datetime.weekday()
     is_weekend = weekday>=5
     return int(is_weekend)
 
 # ----------------------------------------------------
-# Binary Output
+# Binary Output: Whether the transaction happens during night
 def is_night(tx_datetime):
     tx_hour = tx_datetime.hour
-    is_night = tx_hour<=6
+    is_night = tx_hour<=8
     return int(is_night)
 
 # ----------------------------------------------------
-def get_customer_spending_behaviour_features(customer_transactions, windows_size_in_days=[1,7,30]):
-    
-    # Let us first order transactions chronologically
-    customer_transactions=customer_transactions.sort_values('Trans_DATETIME')
-    
-    # The transaction date and time is set as the index, which will allow the use of the rolling function 
-    customer_transactions.index=customer_transactions.Trans_DATETIME
-    
-    # For each window size
-    for window_size in windows_size_in_days:
-        
-        # Compute the sum of the transaction amounts and the number of transactions for the given window size
-        SUM_AMOUNT_Trans_WINDOW=customer_transactions['Trans_AMOUNT'].rolling(str(window_size)+'d').sum()
-        NB_Trans_WINDOW=customer_transactions['Trans_AMOUNT'].rolling(str(window_size)+'d').count()
-    
-        # Compute the average transaction amount for the given window size
-        # NB_Trans_WINDOW is always >0 since current transaction is always included
-        AVG_AMOUNT_Trans_WINDOW=SUM_AMOUNT_Trans_WINDOW/NB_Trans_WINDOW
-    
-        # Save feature values
-        customer_transactions['CUSTOMER_ID_NB_Trans_'+str(window_size)+'DAY_WINDOW']=list(NB_Trans_WINDOW)
-        customer_transactions['CUSTOMER_ID_AVG_AMOUNT_'+str(window_size)+'DAY_WINDOW']=list(AVG_AMOUNT_Trans_WINDOW)
-    
+# define a function computing the average transaction amount in each window size (Customer Views)
+def compute_avg_amt(C_T, window):
+    for window_size in window:
+        # Compute the SUM
+        _SUM = C_T['Trans_AMOUNT'].rolling(str(window_size)+'d').sum()
+        _WIND = C_T['Trans_AMOUNT'].rolling(str(window_size)+'d').count()
+        # Compute the AVG
+        _AVG = _SUM/_WIND
+        # Saving
+        C_T['WIND_Trans_'+str(window_size)+'DAY']=list(_WIND)
+        C_T['AVG_AMOUNT_'+str(window_size)+'DAY']=list(_AVG)
+
+def get_customer_spending_behaviour_features(C_T, window=[1,7,30]):
+    # Order transactions chronologically
+    C_T=C_T.sort_values('Trans_DATETIME')
+    C_T.index=C_T.Trans_DATETIME
+    compute_avg_amt(C_T, window)
     # Reindex according to transaction IDs
-    customer_transactions.index=customer_transactions.TRANSACTION_ID
-        
+    C_T.index=C_T.TRANSACTION_ID
     # And return the dataframe with the new features
-    return customer_transactions
+    return C_T
 
 # ----------------------------------------------------
-def get_count_risk_rolling_window(terminal_transactions, delay_period=7, windows_size_in_days=[1,7,30], feature="STORE_ID"):
-    
-    terminal_transactions=terminal_transactions.sort_values('Trans_DATETIME')
-    
-    terminal_transactions.index=terminal_transactions.Trans_DATETIME
-    
-    NB_FRAUD_DELAY=terminal_transactions['Trans_FRAUD'].rolling(str(delay_period)+'d').sum()
-    NB_Trans_DELAY=terminal_transactions['Trans_FRAUD'].rolling(str(delay_period)+'d').count()
-    
-    for window_size in windows_size_in_days:
-    
-        NB_FRAUD_DELAY_WINDOW=terminal_transactions['Trans_FRAUD'].rolling(str(delay_period+window_size)+'d').sum()
-        NB_Trans_DELAY_WINDOW=terminal_transactions['Trans_FRAUD'].rolling(str(delay_period+window_size)+'d').count()
-    
-        NB_FRAUD_WINDOW=NB_FRAUD_DELAY_WINDOW-NB_FRAUD_DELAY
-        NB_Trans_WINDOW=NB_Trans_DELAY_WINDOW-NB_Trans_DELAY
-    
+# define a function computing the average transaction amount in each window size (STORE Views)
+def update_features(store_T, delay_period, window, feature, NB_FRAUD_DELAY, NB_Trans_DELAY):
+    for window_size in window:
+        NB_FRAUD=store_T['Trans_FRAUD'].rolling(str(delay_period+window_size)+'d').sum()
+        NB_DELAY=store_T['Trans_FRAUD'].rolling(str(delay_period+window_size)+'d').count()
+        NB_FRAUD_WINDOW=NB_FRAUD-NB_FRAUD_DELAY
+        NB_Trans_WINDOW=NB_DELAY-NB_Trans_DELAY
         RISK_WINDOW=NB_FRAUD_WINDOW/NB_Trans_WINDOW
+        store_T[feature+'_NB_Trans_'+str(window_size)+'DAY_WINDOW']=list(NB_Trans_WINDOW)
+        store_T[feature+'_RISK_'+str(window_size)+'DAY_WINDOW']=list(RISK_WINDOW)
         
-        terminal_transactions[feature+'_NB_Trans_'+str(window_size)+'DAY_WINDOW']=list(NB_Trans_WINDOW)
-        terminal_transactions[feature+'_RISK_'+str(window_size)+'DAY_WINDOW']=list(RISK_WINDOW)
-        
-    terminal_transactions.index=terminal_transactions.TRANSACTION_ID
-    
+def get_count_risk_rolling_window(store_T, delay_period=7, window=[1,7,30], feature="STORE_ID"):
+    store_T=store_T.sort_values('Trans_DATETIME')
+    store_T.index=store_T.Trans_DATETIME
+    NB_FRAUD_DELAY=store_T['Trans_FRAUD'].rolling(str(delay_period)+'d').sum()
+    NB_Trans_DELAY=store_T['Trans_FRAUD'].rolling(str(delay_period)+'d').count()
+    update_features(store_T, delay_period, window, feature, NB_FRAUD_DELAY, NB_Trans_DELAY)
+    store_T.index=store_T.TRANSACTION_ID
     # Replace NA values with 0 (all undefined risk scores where NB_Trans_WINDOW is 0) 
-    terminal_transactions.fillna(0,inplace=True)
-    
-    return terminal_transactions
-
-
+    store_T.fillna(0,inplace=True)
+    return store_T
 
 # --------------------------------------------------------------------------------- Model Building
 # ----------------------------------------------------
-def read_from_files(DIR_INPUT, BEGIN_DATE, END_DATE):
-    
-    files = [os.path.join(DIR_INPUT, f) for f in os.listdir(DIR_INPUT) if f>=BEGIN_DATE+'.pkl' and f<=END_DATE+'.pkl']
-
+# reading the data from the previous sections
+def read_from_files(directory, start, end):
+    files = [os.path.join(directory, f) for f in os.listdir(directory) if f>=start+'.pkl' and f<=end+'.pkl']
     frames = []
     for f in files:
         df = pd.read_pickle(f)
         frames.append(df)
         del df
     df_final = pd.concat(frames)
-    
     df_final=df_final.sort_values('TRANSACTION_ID')
     df_final.reset_index(drop=True,inplace=True)
-    #  Note: -1 are missing values for real world data 
-    df_final=df_final.replace([-1],0)
-    
+    df_final=df_final.replace([-1],0) # marking the missing values
     return df_final
 
-def get_train_test_set(transactions_df,
-                       start_date_training,
-                       delta_train=7,delta_delay=7,delta_test=7,
-                       sampling_ratio=1.0,
-                       random_state=0):
-    
-    # Get the training set data
-    train_df = transactions_df[(transactions_df.Trans_DATETIME>=start_date_training) &
-                               (transactions_df.Trans_DATETIME<start_date_training+datetime.timedelta(days=delta_train))]
-    
-    # Get the test set data
+# ----------------------------------------------------
+def get_train_test_set(transactions_df, start_date_training,
+                       delta_train=7,
+                       delta_delay=7,
+                       delta_test=7,
+                       sampling_ratio=1, random_state=33):
+    train_df = transactions_df[(transactions_df.Trans_DATETIME>=start_date_training) & (transactions_df.Trans_DATETIME<start_date_training+datetime.timedelta(days=delta_train))]
     test_df = []
-    
-    # Note: Cards known to be compromised after the delay period are removed from the test set
-    # That is, for each test day, all frauds known at (test_day-delay_period) are removed
-    
-    # First, get known defrauded customers from the training set
+    # Generating the valid test set
+    # First,defrauded customer ID
     known_defrauded_customers = set(train_df[train_df.Trans_FRAUD==1].CUSTOMER_ID)
-    
-    # Get the relative starting day of training set (easier than Trans_DATETIME to collect test data)
+    # Find the relative start day
     start_tx_time_days_training = train_df.Trans_TIME_DAYS.min()
-    
-    # Then, for each day of the test set
+    # Looping to find the compromised card, and considering the delay period
     for day in range(delta_test):
-    
-        # Get test data for that day
-        test_df_day = transactions_df[transactions_df.Trans_TIME_DAYS==start_tx_time_days_training+
-                                                                    delta_train+delta_delay+
-                                                                    day]
-        
-        # Compromised cards from that test day, minus the delay period, are added to the pool of known defrauded customers
-        test_df_day_delay_period = transactions_df[transactions_df.Trans_TIME_DAYS==start_tx_time_days_training+
-                                                                                delta_train+
-                                                                                day-1]
-        
+        test_df_day = transactions_df[transactions_df.Trans_TIME_DAYS==start_tx_time_days_training+delta_train+delta_delay+day]
+        test_df_day_delay_period = transactions_df[transactions_df.Trans_TIME_DAYS==start_tx_time_days_training+delta_train+day-1]
         new_defrauded_customers = set(test_df_day_delay_period[test_df_day_delay_period.Trans_FRAUD==1].CUSTOMER_ID)
         known_defrauded_customers = known_defrauded_customers.union(new_defrauded_customers)
-        
         test_df_day = test_df_day[~test_df_day.CUSTOMER_ID.isin(known_defrauded_customers)]
-        
         test_df.append(test_df_day)
-        
     test_df = pd.concat(test_df)
-    
+    # This is the section because of resampling issues for imbalance classes
     # If subsample
     if sampling_ratio<1:
-        
         train_df_frauds=train_df[train_df.Trans_FRAUD==1].sample(frac=sampling_ratio, random_state=random_state)
         train_df_genuine=train_df[train_df.Trans_FRAUD==0].sample(frac=sampling_ratio, random_state=random_state)
         train_df=pd.concat([train_df_frauds,train_df_genuine])
-        
     # Sort data sets by ascending order of transaction ID
     train_df=train_df.sort_values('TRANSACTION_ID')
     test_df=test_df.sort_values('TRANSACTION_ID')
-    
     return (train_df, test_df)
 
-
+# ---------------------------------------------------- Cross Validation
 def prequentialSplit(transactions_df,
                      start_date_training, 
                      n_folds=4, 
@@ -631,7 +578,7 @@ def get_model_selection_performance_plot(performances_df_dictionary,
     
 def get_model_selection_performances_plots(performances_df_dictionary, 
                                            performance_metrics_list=['AUC ROC', 'Average precision', 'Card Precision@100'],
-                                           ylim_list=[[0.6,0.9],[0.2,0.8],[0.2,0.35]],
+                                           ylim_list=[[0.6,0.9],[0.2,0.8],[0.2,0.6]],
                                            model_classes=['Decision Tree', 
                                                           'Logistic Regression', 
                                                           'Random Forest', 
