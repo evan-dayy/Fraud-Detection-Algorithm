@@ -18,103 +18,27 @@ import graphviz
 import xgboost
 import imblearn
 sns.set_style('whitegrid', {'axes.facecolor': '0.8'})
-# --------------------------------------------------------------------------------- Feature Engineering
-# ----------------------------------------------------
-# Binary Output : Whether a day is during weekend or during weekday
-def is_weekend(tx_datetime):
-    weekday = tx_datetime.weekday()
-    is_weekend = weekday>=5
-    return int(is_weekend)
 
-# ----------------------------------------------------
-# Binary Output: Whether the transaction happens during night
-def is_night(tx_datetime):
-    tx_hour = tx_datetime.hour
-    is_night = tx_hour<=8
-    return int(is_night)
-
-# ----------------------------------------------------
-# define a function computing the average transaction amount in each window size (Customer Views)
-def compute_avg_amt(C_T, window):
-    for window_size in window:
-        # Compute the SUM
-        _SUM = C_T['Trans_AMOUNT'].rolling(str(window_size)+'d').sum()
-        _WIND = C_T['Trans_AMOUNT'].rolling(str(window_size)+'d').count()
-        # Compute the AVG
-        _AVG = _SUM/_WIND
-        # Saving
-        C_T['WIND_Trans_'+str(window_size)+'DAY']=list(_WIND)
-        C_T['AVG_AMOUNT_'+str(window_size)+'DAY']=list(_AVG)
-
-def get_customer_spending_behaviour_features(C_T, window=[1,7,30]):
-    # Order transactions chronologically
-    C_T=C_T.sort_values('Trans_DATETIME')
-    C_T.index=C_T.Trans_DATETIME
-    compute_avg_amt(C_T, window)
-    # Reindex according to transaction IDs
-    C_T.index=C_T.TRANSACTION_ID
-    # And return the dataframe with the new features
-    return C_T
-
-# ----------------------------------------------------
-# define a function computing the average transaction amount in each window size (STORE Views)
-def update_features(store_T, delay_period, window, feature, NB_FRAUD_DELAY, NB_Trans_DELAY):
-    for window_size in window:
-        NB_FRAUD=store_T['Trans_FRAUD'].rolling(str(delay_period+window_size)+'d').sum()
-        NB_DELAY=store_T['Trans_FRAUD'].rolling(str(delay_period+window_size)+'d').count()
-        NB_FRAUD_WINDOW=NB_FRAUD-NB_FRAUD_DELAY
-        NB_Trans_WINDOW=NB_DELAY-NB_Trans_DELAY
-        RISK_WINDOW=NB_FRAUD_WINDOW/NB_Trans_WINDOW
-        store_T[feature+'_NB_Trans_'+str(window_size)+'DAY_WINDOW']=list(NB_Trans_WINDOW)
-        store_T[feature+'_RISK_'+str(window_size)+'DAY_WINDOW']=list(RISK_WINDOW)
-        
-def get_count_risk_rolling_window(store_T, delay_period=7, window=[1,7,30], feature="STORE_ID"):
-    store_T=store_T.sort_values('Trans_DATETIME')
-    store_T.index=store_T.Trans_DATETIME
-    NB_FRAUD_DELAY=store_T['Trans_FRAUD'].rolling(str(delay_period)+'d').sum()
-    NB_Trans_DELAY=store_T['Trans_FRAUD'].rolling(str(delay_period)+'d').count()
-    update_features(store_T, delay_period, window, feature, NB_FRAUD_DELAY, NB_Trans_DELAY)
-    store_T.index=store_T.TRANSACTION_ID
-    # Replace NA values with 0 (all undefined risk scores where NB_Trans_WINDOW is 0) 
-    store_T.fillna(0,inplace=True)
-    return store_T
-
-# --------------------------------------------------------------------------------- Model Building
-# ----------------------------------------------------
-# reading the data from the previous sections
-def read_from_files(directory, start, end):
-    files = [os.path.join(directory, f) for f in os.listdir(directory) if f>=start+'.pkl' and f<=end+'.pkl']
-    frames = []
-    for f in files:
-        df = pd.read_pickle(f)
-        frames.append(df)
-        del df
-    df_final = pd.concat(frames)
-    df_final=df_final.sort_values('TRANSACTION_ID')
-    df_final.reset_index(drop=True,inplace=True)
-    df_final=df_final.replace([-1],0) # marking the missing values
-    return df_final
-
-# ----------------------------------------------------
-def get_train_test_set(transactions_df, start_date_training,
-                       delta_train=7,
-                       delta_delay=7,
-                       delta_test=7,
+def get_train_test_set(transactions_df, train_start,
+                       train_gap=7,
+                       gap_delay=7,
+                       test_gap=7,
                        sampling_ratio=1, random_state=33):
-    train_df = transactions_df[(transactions_df.Trans_DATETIME>=start_date_training) & (transactions_df.Trans_DATETIME<start_date_training+datetime.timedelta(days=delta_train))]
+    train_df = transactions_df[(transactions_df.Trans_DATETIME>=train_start) 
+                               & (transactions_df.Trans_DATETIME<train_start+datetime.timedelta(days=train_gap))]
     test_df = []
     # Generating the valid test set
     # First,defrauded customer ID
-    known_defrauded_customers = set(train_df[train_df.Trans_FRAUD==1].CUSTOMER_ID)
+    obs_fraud = set(train_df[train_df.Trans_FRAUD==1].CUSTOMER_ID)
     # Find the relative start day
-    start_tx_time_days_training = train_df.Trans_TIME_DAYS.min()
+    start_time_train = train_df.Trans_TIME_DAYS.min()
     # Looping to find the compromised card, and considering the delay period
-    for day in range(delta_test):
-        test_df_day = transactions_df[transactions_df.Trans_TIME_DAYS==start_tx_time_days_training+delta_train+delta_delay+day]
-        test_df_day_delay_period = transactions_df[transactions_df.Trans_TIME_DAYS==start_tx_time_days_training+delta_train+day-1]
+    for day in range(test_gap):
+        test_df_day = transactions_df[transactions_df.Trans_TIME_DAYS==start_time_train+train_gap+gap_delay+day]
+        test_df_day_delay_period = transactions_df[transactions_df.Trans_TIME_DAYS==start_time_train+train_gap+day-1]
         new_defrauded_customers = set(test_df_day_delay_period[test_df_day_delay_period.Trans_FRAUD==1].CUSTOMER_ID)
-        known_defrauded_customers = known_defrauded_customers.union(new_defrauded_customers)
-        test_df_day = test_df_day[~test_df_day.CUSTOMER_ID.isin(known_defrauded_customers)]
+        obs_fraud = obs_fraud.union(new_defrauded_customers)
+        test_df_day = test_df_day[~test_df_day.CUSTOMER_ID.isin(obs_fraud)]
         test_df.append(test_df_day)
     test_df = pd.concat(test_df)
     # This is the section because of resampling issues for imbalance classes
@@ -129,44 +53,47 @@ def get_train_test_set(transactions_df, start_date_training,
     return (train_df, test_df)
 
 # ---------------------------------------------------- Cross Validation
-def prequentialSplit(transactions_df,
-                     start_date_training, 
-                     n_folds=4, 
-                     delta_train=7,
-                     delta_delay=7,
-                     delta_assessment=7):
-    prequential_split_indices=[]
-    # Start an iteration to go throught all the folds
-    for fold in range(n_folds):
-        start_date_training_fold = start_date_training-datetime.timedelta(days=fold*delta_assessment)
-        # Updating the train and test data sets
-        (train_df, test_df)=get_train_test_set(transactions_df, start_date_training=start_date_training_fold,
-                                               delta_train=delta_train,delta_delay=delta_delay,delta_test=delta_assessment)
-        indices_train=list(train_df.index)
-        indices_test=list(test_df.index)
-        prequential_split_indices.append((indices_train,indices_test))
-    return prequential_split_indices
+
 
 def prequential_grid_search(transactions_df, 
                             classifier, 
                             input_features, output_feature, 
                             parameters, scoring, 
-                            start_date_training, 
+                            train_start, 
                             n_folds=4,
                             expe_type='Test',
-                            delta_train=7, 
-                            delta_delay=7, 
+                            train_gap=7, 
+                            gap_delay=7, 
                             delta_assessment=7,
                             performance_metrics_list_grid=['roc_auc'],
                             performance_metrics_list=['AUC ROC'],
                             n_jobs=-1):
+    
+    def prequentialSplit(transactions_df,
+                        train_start, 
+                        n_folds=4, 
+                        train_gap=7,
+                        gap_delay=7,
+                        delta_assessment=7):
+        prequential_split_indices=[]
+        # Start an iteration to go throught all the folds
+        for fold in range(n_folds):
+            start_date_training_fold = train_start-datetime.timedelta(days=fold*delta_assessment)
+            # Updating the train and test data sets
+            (train_df, test_df)=get_train_test_set(transactions_df, train_start=start_date_training_fold,
+                                                train_gap=train_gap,gap_delay=gap_delay,test_gap=delta_assessment)
+            indices_train=list(train_df.index)
+            indices_test=list(test_df.index)
+            prequential_split_indices.append((indices_train,indices_test))
+        return prequential_split_indices
+    
     estimators = [('scaler', sklearn.preprocessing.StandardScaler()), ('clf', classifier)]
     pipe = sklearn.pipeline.Pipeline(estimators)
     prequential_split_indices=prequentialSplit(transactions_df,
-                                               start_date_training=start_date_training, 
+                                               train_start=train_start, 
                                                n_folds=n_folds, 
-                                               delta_train=delta_train, 
-                                               delta_delay=delta_delay, 
+                                               train_gap=train_gap, 
+                                               gap_delay=gap_delay, 
                                                delta_assessment=delta_assessment)
     grid_search = sklearn.model_selection.GridSearchCV(pipe, parameters, scoring=scoring, cv=prequential_split_indices, refit=False, n_jobs=n_jobs)
     X, y = transactions_df[input_features], transactions_df[output_feature]
@@ -188,8 +115,8 @@ def model_selection_wrapper(transactions_df,
                             start_date_training_for_valid,
                             start_date_training_for_test,
                             n_folds=4,
-                            delta_train=7, 
-                            delta_delay=7, 
+                            train_gap=7, 
+                            gap_delay=7, 
                             delta_assessment=7,
                             performance_metrics_list_grid=['roc_auc'],
                             performance_metrics_list=['AUC ROC'],
@@ -198,11 +125,11 @@ def model_selection_wrapper(transactions_df,
     performances_df_validation=prequential_grid_search(transactions_df, classifier, 
                             input_features, output_feature,
                             parameters, scoring, 
-                            start_date_training=start_date_training_for_valid,
+                            train_start=start_date_training_for_valid,
                             n_folds=n_folds,
                             expe_type='Validation',
-                            delta_train=delta_train, 
-                            delta_delay=delta_delay, 
+                            train_gap=train_gap, 
+                            gap_delay=gap_delay, 
                             delta_assessment=delta_assessment,
                             performance_metrics_list_grid=performance_metrics_list_grid,
                             performance_metrics_list=performance_metrics_list,
@@ -211,11 +138,11 @@ def model_selection_wrapper(transactions_df,
     performances_df_test=prequential_grid_search(transactions_df, classifier, 
                             input_features, output_feature,
                             parameters, scoring, 
-                            start_date_training=start_date_training_for_test,
+                            train_start=start_date_training_for_test,
                             n_folds=n_folds,
                             expe_type='Test',
-                            delta_train=delta_train, 
-                            delta_delay=delta_delay, 
+                            train_gap=train_gap, 
+                            gap_delay=gap_delay, 
                             delta_assessment=delta_assessment,
                             performance_metrics_list_grid=performance_metrics_list_grid,
                             performance_metrics_list=performance_metrics_list,
@@ -515,7 +442,7 @@ def plot_decision_boundary_classifier(ax,
     
 
 # ----------------------------------------------------    
-def kfold_cv_with_classifier(classifier,
+def cs_classifer(classifier,
                              X,
                              y,
                              n_splits=5,
@@ -545,21 +472,21 @@ def kfold_cv_with_classifier(classifier,
 
 
 # ----------------------------------------------------
-def plot_decision_boundary(classifier_0,
+def boundary(classifier_0,
                            train_df, 
                            test_df):
     fig_decision_boundary, ax = plt.subplots(1, 3, figsize=(5*3,5))
     plot_decision_boundary_classifier(ax[0], classifier_0,
                                   train_df,
-                                  title="Decision surface of the decision tree\n With training data",
+                                  title="Decision surface + training data",
                                   plot_training_data=True)
     plot_decision_boundary_classifier(ax[1], classifier_0,
                                   train_df,
-                                  title="Decision surface of the decision tree\n",
+                                  title="Decision surface",
                                   plot_training_data=False)
     plot_decision_boundary_classifier(ax[2], classifier_0,
                                   test_df,
-                                  title="Decision surface of the decision tree\n With test data",
+                                  title="Decision surface + test data",
                                   plot_training_data=True)
 
     ax[-1].legend(loc='upper left', 
