@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import datetime
-sns.set_style('darkgrid', {'axes.facecolor': '1'})
+sns.set_style('whitegrid', {'axes.facecolor': '1'})
 
 # ----------------------------------------------------------------------
 def Simulate_customer_profile_df(n_customers, random_state=66):
